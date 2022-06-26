@@ -1,0 +1,27 @@
+version: '3.7'
+services:
+    rabbitmq:
+        image: 'rabbitmq:3.6-management-alpine'
+        ports:
+          - '5672:5672'
+          - '15672:15672'    
+    app01:
+        shm_size: '1000000000'
+        build:
+            context: ./app/src
+        tty: true
+        volumes:
+            - './app:/src'
+        environment:
+            - ACCESSKEY=${ACCESSKEY}
+            - ACCESSSECRETKEY=${ACCESSSECRETKEY}
+            - REGION=${REGION}
+            - VPC=${VPC}
+            - OTHERDNS=${OTHERDNS}
+    nginx:
+        build: ./nginx
+        tty: true
+        links:
+            - app01
+        ports:
+            - '80:80'

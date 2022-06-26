@@ -1,0 +1,12 @@
+version: '3.7'
+services:
+    app02:
+        shm_size: '1000000000'
+        build:
+            context: /home/ec2-user
+        tty: true
+        volumes:
+            - '/home/ec2-user'
+        environment: 
+            - HOSTNAME=${HOSTNAME}
+            - RABBIT=${RABBIT}
