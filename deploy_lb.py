@@ -46,9 +46,7 @@ def instance_config(inst, key_name, access_key, access_secret_key, region, vpc_i
     c = paramiko.SSHClient()
     c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
-    # SSHClient connect is the most finicky part, if you miss anything from above \
-    # (mismatched regions, no automatically assigned IP addresses, no inbound rules for security group), \
-    # this will fail to connect.
+    # SSHClient connect 
     c.connect(hostname=dns, username="ec2-user", pkey=k)
 
     # Upload docker image
@@ -63,8 +61,7 @@ def instance_config(inst, key_name, access_key, access_secret_key, region, vpc_i
         zip_path,
         '/home/ec2-user/' + zip_fname
     )
-    # .read() will read until EOF, causing the script to run forever
-    # use .shutdown_write() and sys to close the channel before reading
+    # function to perform shell commands in the ec2
     def exec_shutdown_write(c, command, t=1000):
         stdin, stdout, stderr = c.exec_command(command, timeout=t)
         stdout.channel.shutdown_write()
@@ -128,21 +125,16 @@ with open('{}.pem'.format(key_name), 'w') as w:
     w.write(key_str[key_str.index('-----'):])
 key_str = open('{}.pem'.format(key_name), 'r').read()
 
-print(sys.argv)
 sg_id = sys.argv[1]
 subnet_public_first_id = sys.argv[2]
 subnet_public_second_id = sys.argv[3]
 vpc_id = sys.argv[4]
 
-# sg_id = "sg-068b6cba76d14d627"
-# subnet_public_first_id = "subnet-0c59a1b80ecec3a0e"
-# subnet_public_second_id = "subnet-06ef963ac3efc30ec"
-# vpc_id = "vpc-014adac182ea921b9"
-
 # Runs EC2
 output1 = aws_cli("aws ec2 run-instances --image-id {} --count 1 --instance-type t2.micro --key-name {} --security-group-ids {} --subnet-id {}".format(image, key_name, sg_id, subnet_public_first_id))
 inst1 = output1['Instances'][0]['InstanceId']
 
+# Waiting untill ec2 is running to get its DNS 
 while(aws_cli(("aws ec2 describe-instance-status --instance-id {} --query InstanceStatuses[].InstanceState[].Name[]").format(inst1)) != ['running']):
     print('waiting for runnig ec2 1 to get public dns...')
 dns_inst1 = aws_cli(('aws ec2 describe-instances --instance-ids {} --query Reservations[].Instances[][].PublicDnsName').format(inst1))[0]
@@ -151,14 +143,17 @@ dns_inst1 = aws_cli(('aws ec2 describe-instances --instance-ids {} --query Reser
 output2 = aws_cli("aws ec2 run-instances --image-id {} --count 1 --instance-type t2.micro --key-name {} --security-group-ids {} --subnet-id {}".format(image, key_name, sg_id, subnet_public_second_id))
 inst2 = output2['Instances'][0]['InstanceId']
 
+# Waiting untill ec2 is running to get its DNS 
 while(aws_cli(("aws ec2 describe-instance-status --instance-id {} --query InstanceStatuses[].InstanceState[].Name[]").format(inst2)) != ['running']):
     print('waiting for runnig ec2 2 to get public dns...')
 dns_inst2 = aws_cli(('aws ec2 describe-instances --instance-ids {} --query Reservations[].Instances[][].PublicDnsName').format(inst2))[0]
 
+# config ec2, uploading the code, docker.compose etc.
 threading.Thread(target=instance_config, args=(inst1, key_name, access_key, access_secret_key, region, vpc_id, dns_inst2)).start()
 
 time.sleep(20)
 
+# config ec2, uploading the code, docker.compose etc.
 threading.Thread(target=instance_config, args=(inst2, key_name, access_key, access_secret_key, region, vpc_id, dns_inst1)).start()
 
 # Load balancer

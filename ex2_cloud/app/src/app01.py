@@ -231,13 +231,13 @@ class RpcClient(object):
                 # add instance-id to delete instace before deploying another one
                 deploy(os.environ['ACCESSKEY'], os.environ['ACCESSSECRETKEY'], os.environ['REGION'], self.host, 1, props.headers.instance-id)
                 # enqueue to other worker the job
-                self.call1(self.corr_id, self.body)
+                self.enqueue_rabbit(self.corr_id, self.body)
         else:
             if self.corr_id == props.correlation_id:
                 self.response = body
     
     # function which is called when user do enquque  
-    def call1(self, corr_id, body):
+    def enqueue_rabbit(self, corr_id, body):
         if self.connection.is_closed:
             self.connect()
         self.response = None
@@ -274,7 +274,7 @@ def index():
     return 'OK'
 
 @app.route('/enqueue', methods=['PUT'])
-def add1():
+def enqueue():
     args = request.args
     iterations = args.get('iterations')
     if iterations is None:
@@ -286,7 +286,7 @@ def add1():
     print(data, flush=True)
     body={'corr_id': corr_id, 'payload': data.decode('utf-8'), 'iterations': str(iterations)}
     print(body, flush=True)
-    threading.Thread(target=rpc.call1, args=(corr_id,body)).start()
+    threading.Thread(target=rpc.enqueue_rabbit, args=(corr_id,body)).start()
     return "sent to proccesing, the id is " + corr_id
 
 

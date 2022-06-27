@@ -35,7 +35,7 @@ def work(buffer, iterations, expire):
     return output
 
 # This function is called once a messafe is taken from the queue
-def on_request1(ch, method, props, body):
+def on_request(ch, method, props, body):
     timestamp = time.time()
     now = datetime.datetime.now()
 
@@ -63,7 +63,7 @@ def on_request1(ch, method, props, body):
 
 
 channel.basic_qos(prefetch_count=1)
-channel.basic_consume(queue='rpc_queue', on_message_callback=on_request1)
+channel.basic_consume(queue='rpc_queue', on_message_callback=on_request)
 
 print(" [x] Awaiting RPC requests")
 channel.start_consuming()
