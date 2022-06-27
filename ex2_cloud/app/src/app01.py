@@ -11,7 +11,6 @@ import time
 import datetime
 import requests
 import os
-
 import json
 import time
 import os
@@ -23,6 +22,7 @@ from dateutil.parser import *
 import paramiko
 from collections import OrderedDict
 
+# Function to preform aws cli commands
 def aws_cli(command):
     output = check_output(
         command,
@@ -35,8 +35,9 @@ def aws_cli(command):
             output = output.decode('ascii').strip()
         return output
 
-
+# Instance worker configuration, here we unzip the files and create the docker image
 def config_inst(key_name, host_name, inst):
+    
     fname = 'src2'
 
     # Inner folder of upload (to run later)
@@ -118,15 +119,20 @@ def config_inst(key_name, host_name, inst):
 
     c.close() 
 
+# This is deploy function which deploys the aws instace worker
+# default we deploy one worker
+# if intsnace_id is different than 0, we need to delete it, because it is to slow and has timeout.
 def deploy(key, s_key, region, vpc, host_name, num_workers=1, instance_id=0):
     
     image = 'ami-0947d2ba12ee1ff75' # Free tier Amazon Linux 2 AMI
     region = aws_cli('rm -rf /root/.aws/')
 
     aws_cli('aws configure set aws_access_key_id {}; aws configure set aws_secret_access_key {};aws configure set region {};'.format(key, s_key, region))
-    # Set key name here
+   
+    # Set key 
     key_name = str(int(time.time()))
 
+    # deleting instance with timeout
     if instance_id != 0:
         aws_cli('delete-instance --instance-id {}'.format(instance_id))
 
@@ -170,6 +176,7 @@ def deploy(key, s_key, region, vpc, host_name, num_workers=1, instance_id=0):
     
 app = Flask(__name__)
 
+# this is the queue in memory for return the results
 queue = OrderedDict()
 list_files = {}
 TIMEOUT="timeout"
@@ -186,6 +193,7 @@ class RpcClient(object):
         self.channel = None
         self._is_closed = False
         self.open = False
+        # get the instance host in order to send the worker rabbit-mq address
         self.host = requests.get('http://169.254.169.254/latest/meta-data/public-hostname').text
         self.connect()
     
@@ -208,17 +216,15 @@ class RpcClient(object):
         
         print("in connect", flush=True)
         self.open = True
+        # Deploying two workers 
         self.deploy_workers(2)
 
 
     def deploy_workers(self, num_workers=1):
         threading.Thread(target=deploy, args=(os.environ['ACCESSKEY'], os.environ['ACCESSSECRETKEY'], os.environ['REGION'], os.environ['VPC'], self.host, num_workers)).start()
 
-            
+    # This function is called when a worker finishes its job - on_message_callback
     def on_response(self, ch, method, props, body):
-        print("hay", flush=True)
-        print(body, flush=True)
-        print(props, flush=True)
         if 'instance-id' in props.headers.keys():
             # do auto scaling - call deploy worker & remove worker by id
             if self.corr_id == props.correlation_id:
@@ -229,42 +235,20 @@ class RpcClient(object):
         else:
             if self.corr_id == props.correlation_id:
                 self.response = body
-
-    def call(self, n, corr_id):
-        self.response = None
-        self.corr_id = corr_id
-        queue[self.corr_id] = None
-        self.channel.basic_publish(
-            exchange='',
-            routing_key='rpc_queue',
-            properties=pika.BasicProperties(
-                reply_to=self.callback_queue,
-                correlation_id=self.corr_id,
-            ),
-            body=str(n))
-        while self.response is None:
-            self.connection.process_data_events()
-        queue[self.corr_id] = self.response
-        print(self.response, flush=True)
-        return int(self.response)
     
+    # function which is called when user do enquque  
     def call1(self, corr_id, body):
         if self.connection.is_closed:
             self.connect()
-            print("CLOSE!!!!!!!!!!!!!!!!!!!")
-        print("in call1", flush=True)
         self.response = None
         self.corr_id = corr_id
         self.body = body
         queue[self.corr_id] = None
+        # Creating limited time for task to be preformed
         timestamp = time.time()
-        body['created'] = str(timestamp),
+        body['created'] = str(timestamp)
         body['expire'] = str(datetime.timedelta(minutes=5).total_seconds())
         body=json.dumps(body)
-        print(body, flush=True)
-        print(type(body), flush=True)
-        print("----------IS OPEN ?-----------", flush=True)
-        print(self.channel, flush=True)
         self.channel.basic_publish(
             exchange='',
             routing_key='rpc_queue',
@@ -281,6 +265,8 @@ class RpcClient(object):
 
 
 rpc = RpcClient()
+# other_instance is for the case where use asks for pull completed with large number 
+# so we http to the second EC2 to merge results from its queue
 other_instance = os.environ['OTHERDNS']
 
 @app.route('/')
@@ -324,11 +310,8 @@ def pull():
             # we want to join the other queue from the other ec2 instnace 
             if(i > 0):
                 other_list_bytes = requests.post(f"http://{other_instance}/pullCompleted?top={int(num)- i}").content
-                print(other_list_bytes)
                 other_list_str = other_list_bytes.decode("utf-8") 
-                print(other_list_str)
                 other_list = other_list_str.strip('][').split(', ')
-                print(other_list)
                 return_list += other_list
     return str(return_list)
 

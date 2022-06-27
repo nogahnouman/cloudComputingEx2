@@ -20,38 +20,36 @@ print(' [*] Waiting for messages.')
 
 TIMEOUT="timeout"
 
+# working function to read info in batches
 def work(buffer, iterations, expire): 
     import hashlib
     output = hashlib.sha512(buffer).digest() 
     start = time.time()
     for i in range(int(iterations) - 1):
         print(time.time() - start, flush=True)
+        # if there is timeout we stop the process
         if (time.time() - start > expire):
             return TIMEOUT
         output = hashlib.sha512(output).digest()
     print(output, flush=True)
     return output
 
-
+# This function is called once a messafe is taken from the queue
 def on_request1(ch, method, props, body):
     timestamp = time.time()
     now = datetime.datetime.now()
-    #data = json.loads(body)
-    print(body)
+
     data = json.loads(body.decode("utf-8"))
     expire = float(data['expire'])
-    print(data, flush=True)
     output = work(data['payload'].encode("utf-8"), data['iterations'].encode("utf-8"), expire)
     
     created = float(data['created'][0])
     time_taken = timestamp - created
-    print(time_taken, flush=True)
     headers= {'time':str(time_taken)}
 
     # if timeout we want to get the instance id and send it for scaling
     if output == TIMEOUT:
         instnace_id = requests.get("http://169.254.169.254/latest/meta-data/instance-id ")
-        print(instnace_id)
         headers= {'instnace_id':instnace_id}
         output = b'TIMEOUT'
         
