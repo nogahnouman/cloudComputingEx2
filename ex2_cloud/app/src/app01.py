@@ -1,4 +1,3 @@
-from selectors import EpollSelector
 from flask import Flask
 import pika
 from flask import request
@@ -178,8 +177,45 @@ app = Flask(__name__)
 
 # this is the queue in memory for return the results
 queue = OrderedDict()
+treatment_queue = OrderedDict()
 list_files = {}
 TIMEOUT="timeout"
+
+class msg(object):
+    def __init__(self, corr_id, body):
+        self.response = None
+        self.corr_id = corr_id
+        self.body = body
+        queue[self.corr_id] = None
+
+    def enqueue_msg(self, rpc_client):
+        if rpc_client.connection.is_closed:
+            rpc_client.connect()
+        queue[self.corr_id] = None
+        # Creating limited time for task to be preformed
+        timestamp = time.time()
+        self.body['created'] = str(timestamp)
+        self.body['expire'] = str(datetime.timedelta(minutes=5).total_seconds())
+        body=json.dumps(self.body)
+        self.channel.basic_publish(
+            exchange='',
+            routing_key='rpc_queue',
+            properties=pika.BasicProperties(
+                reply_to=rpc_client.callback_queue,
+                correlation_id=self.corr_id,
+            ),
+            body=body)
+        # answer will be inserted to queue in on_response function in rpc client
+        while queue[self.corr_id] is None:
+            rpc_client.connection.process_data_events()
+        # delete element form queue if timeout
+        if self.corr_id in  queue.keys():
+            if queue[self.corr_id] == TIMEOUT:
+                del queue[self.corr_id]
+            # delete info from backup queue because job has already done
+            else:
+                del treatment_queue[self.corr_id]
+            
 
 class RpcClient(object):
 
@@ -226,42 +262,16 @@ class RpcClient(object):
     # This function is called when a worker finishes its job - on_message_callback
     def on_response(self, ch, method, props, body):
         if 'instance-id' in props.headers.keys():
+            # in order to stop while loop in enqueue_msg line 211
+            queue[props.correlation_id] = TIMEOUT
             # do auto scaling - call deploy worker & remove worker by id
-            if self.corr_id == props.correlation_id:
-                # add instance-id to delete instace before deploying another one
-                deploy(os.environ['ACCESSKEY'], os.environ['ACCESSSECRETKEY'], os.environ['REGION'], self.host, 1, props.headers.instance-id)
-                # enqueue to other worker the job
-                self.enqueue_rabbit(self.corr_id, self.body)
+            deploy(os.environ['ACCESSKEY'], os.environ['ACCESSSECRETKEY'], os.environ['REGION'], self.host, 1, props.headers.instance-id)
+            # create new msg object with the info from the backup queue
+            msg(props.correlation_id, treatment_queue[props.correlation_id])
+            msg.enqueue_msg(self)
         else:
-            if self.corr_id == props.correlation_id:
-                self.response = body
-    
-    # function which is called when user do enquque  
-    def enqueue_rabbit(self, corr_id, body):
-        if self.connection.is_closed:
-            self.connect()
-        self.response = None
-        self.corr_id = corr_id
-        self.body = body
-        queue[self.corr_id] = None
-        # Creating limited time for task to be preformed
-        timestamp = time.time()
-        body['created'] = str(timestamp)
-        body['expire'] = str(datetime.timedelta(minutes=5).total_seconds())
-        body=json.dumps(body)
-        self.channel.basic_publish(
-            exchange='',
-            routing_key='rpc_queue',
-            properties=pika.BasicProperties(
-                reply_to=self.callback_queue,
-                correlation_id=self.corr_id,
-            ),
-            body=body)
-        while self.response is None:
-            self.connection.process_data_events()
-        queue[self.corr_id] = self.response
-        print(self.response)
-        return (self.response)
+            # update information in queue
+            queue[props.correlation_id] = body
 
 
 rpc = RpcClient()
@@ -286,7 +296,10 @@ def enqueue():
     print(data, flush=True)
     body={'corr_id': corr_id, 'payload': data.decode('utf-8'), 'iterations': str(iterations)}
     print(body, flush=True)
-    threading.Thread(target=rpc.enqueue_rabbit, args=(corr_id,body)).start()
+    # Save info in treatment queue in case of timeout 
+    treatment_queue[corr_id] = body
+    msg(corr_id, body)
+    threading.Thread(target=msg.enqueue_msg, args=(rpc)).start()
     return "sent to proccesing, the id is " + corr_id
 
 
@@ -295,6 +308,11 @@ def send_results():
     print(str(queue.items()))
     return str(queue.items())
 
+@app.route("/stop_wokrer", methods=['POST'])
+def stop_worker(args):
+    worker_id = args.get('instnace_id')
+    print("stopping worker")
+    aws_cli('delete-instance --instance-id {}'.format(worker_id))
 
 @app.route("/pullCompleted", methods=['POST'])
 def pull():
